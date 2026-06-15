@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import pickle
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+from IPython.display import display
 
 """## Bước 1: Đọc file và đặt tên cột"""
 
@@ -358,3 +359,287 @@ plt.legend(frameon=True, loc='lower left', fontsize=10)
 plt.tight_layout()
 plt.savefig('naive_bayes_tuning.png', dpi=150)
 plt.show()
+
+"""# Tuần 3 — Wine Dataset
+Thành Viên 3: Kỹ sư Học máy Giai đoạn 2
+
+## Tổng quan:
+* **Mục tiêu chính:** Huấn luyện mô hình thứ 3 (SVM), thu thập kết quả cả 3 mô hình
+  và xây dựng bảng so sánh hiệu năng tổng hợp.
+* **Mô hình được chọn:** Support Vector Machine (SVM) — được khuyến nghị vì:
+  1. SVM phù hợp với bài toán phân loại đa lớp (multi-class classification)
+     trên tập dữ liệu có kích thước vừa phải (~178 mẫu).
+  2. SVM có khả năng xử lý không gian đặc trưng nhiều chiều (13 thuộc tính)
+     rất hiệu quả nhờ ánh xạ kernel.
+  3. Việc so sánh SVM (dựa trên ranh giới siêu phẳng) với KNN (dựa trên khoảng cách)
+     và Naive Bayes (dựa trên xác suất) sẽ cho thấy toàn diện hiệu quả của
+     3 trường phái thuật toán khác nhau trên cùng một tập dữ liệu.
+"""
+
+# =====================================================================
+# TUẦN 3: MÔ HÌNH THỨ 3 — SUPPORT VECTOR MACHINE (SVM)
+# =====================================================================
+
+"""## Bước 1 (Tuần 3): Huấn luyện và tinh chỉnh tham số cho mô hình SVM
+
+### Giải thích lý thuyết:
+* **SVM (Support Vector Machine)** là thuật toán phân loại hoạt động bằng cách
+  tìm kiếm **siêu phẳng tối ưu** (optimal hyperplane) trong không gian đặc trưng
+  để phân tách các lớp dữ liệu với **khoảng cách biên lớn nhất** (maximum margin).
+
+* **Các siêu tham số cần tinh chỉnh:**
+  - **`C` (Regularization):** Kiểm soát sự đánh đổi giữa biên rộng (tổng quát hóa)
+    và phân loại chính xác trên tập huấn luyện. Giá trị `C` nhỏ → biên rộng,
+    chấp nhận sai lệch (underfitting). Giá trị `C` lớn → biên hẹp,
+    ưu tiên chính xác (overfitting).
+  - **`kernel`:** Hàm biến đổi không gian đặc trưng.
+    + `rbf` (Radial Basis Function): Phù hợp dữ liệu phi tuyến.
+    + `linear`: Phù hợp dữ liệu tuyến tính.
+    + `poly`: Sử dụng đa thức bậc cao.
+  - **`gamma`:** Kiểm soát phạm vi ảnh hưởng của mỗi mẫu huấn luyện.
+    Chỉ áp dụng cho kernel `rbf` và `poly`.
+    + `scale`: gamma = 1 / (n_features * X.var())
+    + `auto`: gamma = 1 / n_features
+    + Giá trị cụ thể (0.01, 0.1, 1): Gamma nhỏ → vùng ảnh hưởng rộng (mượt),
+      gamma lớn → vùng ảnh hưởng hẹp (nhọn, dễ overfitting).
+"""
+
+from sklearn.svm import SVC
+from sklearn.model_selection import GridSearchCV
+import numpy as np
+import matplotlib.pyplot as plt
+
+print("=" * 60)
+print("TUẦN 3 — KỸ SƯ HỌC MÁY GIAI ĐOẠN 2")
+print("=" * 60)
+print("\n--- TIẾN TRÌNH TỐI ƯU SIÊU THAM SỐ SVM ---\n")
+
+# 1. Kế thừa dữ liệu đã chuẩn hóa từ Thành viên 1 (Tuần 1)
+#    và khung đánh giá 10-Fold CV từ Bước 1 (Tuần 2)
+X_input = X_scaled       # Dữ liệu 13 chiều đã được StandardScaler
+y_input = labels          # Nhãn lớp (1, 2, 3)
+
+# 2. Khởi tạo mô hình SVM
+#    random_state=42: Đảm bảo kết quả tái lập được
+svm_model = SVC(random_state=42)
+
+# 3. Thiết lập lưới tham số chi tiết cho SVM
+#    Giải thích chiến lược quét:
+#    - C: Quét 5 bậc logarit từ 0.1 đến 100 để tìm mức phạt tối ưu
+#    - kernel: Thử 3 loại kernel phổ biến nhất
+#    - gamma: Thử 5 chiến lược khác nhau cho kernel phi tuyến
+param_grid_svm = {
+    'C': [0.1, 1, 10, 50, 100],              # Hệ số điều chuẩn (Regularization)
+    'kernel': ['rbf', 'linear', 'poly'],       # Hàm nhân (Kernel function)
+    'gamma': ['scale', 'auto', 0.01, 0.1, 1]  # Hệ số kernel (chỉ ảnh hưởng rbf, poly)
+}
+
+total_configs = len(param_grid_svm['C']) * len(param_grid_svm['kernel']) * len(param_grid_svm['gamma'])
+print(f"[Đang chạy] Quét {total_configs} cấu hình kết hợp trên khung 10-Fold CV...")
+
+# 4. Kích hoạt GridSearchCV
+#    - Kế thừa 'cv_folds' (StratifiedKFold 10-Fold) từ Bước 1 Tuần 2
+#    - Kế thừa 'weighted_f1_scorer' để đảm bảo công bằng khi so sánh
+grid_search_svm = GridSearchCV(
+    estimator=svm_model,
+    param_grid=param_grid_svm,
+    cv=cv_folds,                  # ← Kế thừa từ Tuần 2
+    scoring=weighted_f1_scorer,   # ← Kế thừa từ Tuần 2
+    n_jobs=-1,                    # Sử dụng toàn bộ CPU để tăng tốc
+    return_train_score=True       # Lưu cả điểm tập huấn luyện để phân tích
+)
+grid_search_svm.fit(X_input, y_input)
+
+# 5. Trích xuất kết quả tối ưu
+best_svm_params = grid_search_svm.best_params_
+best_svm_f1 = grid_search_svm.best_score_
+best_svm_model = grid_search_svm.best_estimator_
+
+print("-" * 55)
+print("KẾT QUẢ TỐI ƯU MÔ HÌNH SVM:")
+print(f"-> Hệ số điều chuẩn (C) tốt nhất:      {best_svm_params['C']}")
+print(f"-> Hàm nhân (Kernel) tối ưu:            {best_svm_params['kernel']}")
+print(f"-> Hệ số gamma tối ưu:                  {best_svm_params['gamma']}")
+print(f"-> Weighted F1-Score cao nhất đạt được:  {best_svm_f1:.4f}")
+print("-" * 55)
+
+"""### Giải thích kết quả SVM:
+* **Hệ số C:** Giá trị C tối ưu cho biết mức độ trừng phạt mà mô hình áp dụng
+  lên các mẫu bị phân loại sai. Giá trị C vừa phải (ví dụ 1-10) thường cho thấy
+  dữ liệu có thể phân tách tốt mà không cần ép biên quá chặt.
+* **Kernel:** Loại kernel tối ưu phản ánh cấu trúc phân bố của dữ liệu Wine
+  trong không gian 13 chiều.
+* **Gamma:** Ảnh hưởng đến độ "cong" của ranh giới quyết định. Giá trị gamma
+  nhỏ tạo ranh giới mượt (tổng quát hóa tốt), gamma lớn tạo ranh giới
+  phức tạp (dễ overfitting).
+"""
+
+# 6. Trực quan hóa Top 10 cấu hình SVM tốt nhất
+cv_results_svm = grid_search_svm.cv_results_
+
+df_svm_results = pd.DataFrame({
+    'C': cv_results_svm['param_C'],
+    'Kernel': cv_results_svm['param_kernel'],
+    'Gamma': cv_results_svm['param_gamma'],
+    'Weighted F1-Score (TB)': cv_results_svm['mean_test_score'],
+    'Độ lệch chuẩn (Std)': cv_results_svm['std_test_score']
+})
+
+df_svm_top10 = df_svm_results.sort_values(
+    by='Weighted F1-Score (TB)', ascending=False
+).head(10).reset_index(drop=True)
+
+print("\nTOP 10 CẤU HÌNH SVM XUẤT SẮC NHẤT:")
+display(df_svm_top10)
+
+# 7. Vẽ đồ thị Validation Curve cho SVM (theo giá trị C, với kernel tối ưu)
+best_kernel = best_svm_params['kernel']
+best_gamma = best_svm_params['gamma']
+
+# Lọc các kết quả có cùng kernel và gamma tối ưu, chỉ thay đổi C
+c_values = []
+c_scores = []
+for i in range(len(cv_results_svm['params'])):
+    p = cv_results_svm['params'][i]
+    if p['kernel'] == best_kernel and p['gamma'] == best_gamma:
+        c_values.append(p['C'])
+        c_scores.append(cv_results_svm['mean_test_score'][i])
+
+sort_idx = np.argsort(c_values)
+c_values = np.array(c_values)[sort_idx]
+c_scores = np.array(c_scores)[sort_idx]
+
+plt.figure(figsize=(10, 5), facecolor='white')
+ax = plt.axes()
+ax.set_facecolor('#f9f9f9')
+
+plt.plot(c_values, c_scores, color='#8e44ad', marker='D', markersize=6,
+         linestyle='-', linewidth=2,
+         label=f'Cấu hình: kernel={best_kernel}, gamma={best_gamma}')
+
+plt.scatter(best_svm_params['C'], best_svm_f1, color='red', marker='*',
+            s=200, zorder=5,
+            label=f"Best C={best_svm_params['C']} (F1={best_svm_f1:.4f})")
+
+plt.xscale('log')
+plt.xlabel('Giá trị siêu tham số C (Log Scale)', fontsize=11)
+plt.ylabel('Hiệu năng: Weighted F1-Score', fontsize=11)
+plt.title('ĐỒ THỊ TINH CHỈNH SIÊU THAM SỐ C — SUPPORT VECTOR MACHINE',
+          fontsize=12, fontweight='bold', pad=15)
+plt.grid(True, which="both", color='#e5e5e5', linewidth=0.7)
+plt.legend(frameon=True, loc='lower right', fontsize=10)
+
+plt.tight_layout()
+plt.savefig('svm_tuning.png', dpi=150)
+plt.show()
+
+"""## Bước 2 (Tuần 3): Bảng so sánh hiệu năng 3 mô hình
+
+### Giải thích:
+* Bước này thu thập kết quả `Weighted F1-Score` tốt nhất và bộ tham số tối ưu
+  của cả 3 mô hình (KNN, Naive Bayes, SVM) để tạo thành một bảng so sánh
+  tổng hợp dưới dạng DataFrame.
+* Bảng so sánh giúp đánh giá khách quan và trực quan hiệu quả phân loại
+  của từng thuật toán trên cùng tập dữ liệu Wine, cùng khung đánh giá 10-Fold CV.
+"""
+
+print("\n" + "=" * 60)
+print("BẢNG SO SÁNH HIỆU NĂNG 3 MÔ HÌNH PHÂN LOẠI")
+print("=" * 60)
+
+# 1. Thu thập kết quả tốt nhất từ cả 3 mô hình
+#    (Các biến best_knn_params, best_knn_f1, best_nb_params, best_nb_f1,
+#     best_svm_params, best_svm_f1 đã được tính ở các bước trước)
+
+# Chuyển đổi best_params thành chuỗi dễ đọc cho bảng so sánh
+knn_params_str = (
+    f"K={best_knn_params['n_neighbors']}, "
+    f"p={best_knn_params['p']} "
+    f"({'Manhattan' if best_knn_params['p'] == 1 else 'Euclidean'}), "
+    f"weights={best_knn_params['weights']}"
+)
+
+nb_params_str = f"var_smoothing={best_nb_params['var_smoothing']:.2e}"
+
+svm_params_str = (
+    f"C={best_svm_params['C']}, "
+    f"kernel={best_svm_params['kernel']}, "
+    f"gamma={best_svm_params['gamma']}"
+)
+
+# 2. Xây dựng DataFrame bảng so sánh
+comparison_data = {
+    'Tên mô hình': ['K-Nearest Neighbors (KNN)', 'Gaussian Naive Bayes', 'Support Vector Machine (SVM)'],
+    'Best Params': [knn_params_str, nb_params_str, svm_params_str],
+    'Weighted F1-Score': [best_knn_f1, best_nb_f1, best_svm_f1]
+}
+
+df_comparison = pd.DataFrame(comparison_data)
+
+# 3. Sắp xếp theo F1-Score từ cao xuống thấp
+df_comparison = df_comparison.sort_values(
+    by='Weighted F1-Score', ascending=False
+).reset_index(drop=True)
+
+# 4. Đánh số thứ hạng
+df_comparison.insert(0, 'Thứ hạng', range(1, len(df_comparison) + 1))
+
+# 5. Định dạng F1-Score đẹp hơn (4 chữ số thập phân)
+df_comparison['Weighted F1-Score'] = df_comparison['Weighted F1-Score'].apply(
+    lambda x: f"{x:.4f}"
+)
+
+print("\n")
+display(df_comparison)
+
+# 6. Trực quan hóa bảng so sánh bằng biểu đồ cột
+fig, ax = plt.subplots(figsize=(10, 6), facecolor='white')
+ax.set_facecolor('#f9f9f9')
+
+model_names = ['KNN', 'Naive Bayes', 'SVM']
+f1_scores = [best_knn_f1, best_nb_f1, best_svm_f1]
+colors_bar = ['#3498db', '#e67e22', '#8e44ad']
+
+bars = ax.bar(model_names, f1_scores, color=colors_bar, width=0.5,
+              edgecolor='white', linewidth=2, zorder=3)
+
+# Thêm nhãn giá trị lên mỗi cột
+for bar, score in zip(bars, f1_scores):
+    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.002,
+            f'{score:.4f}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+# Thiết lập giới hạn trục Y hợp lý (từ 0.9 để phóng to sự khác biệt)
+y_min_plot = min(f1_scores) - 0.03
+y_max_plot = max(f1_scores) + 0.02
+ax.set_ylim(y_min_plot, y_max_plot)
+
+ax.set_xlabel('Mô hình phân loại', fontsize=12)
+ax.set_ylabel('Weighted F1-Score', fontsize=12)
+ax.set_title('SO SÁNH HIỆU NĂNG 3 MÔ HÌNH PHÂN LOẠI — WINE DATASET\n(10-Fold Stratified Cross-Validation)',
+             fontsize=13, fontweight='bold', pad=15)
+ax.grid(True, axis='y', color='#e5e5e5', linewidth=0.7, zorder=0)
+ax.set_axisbelow(True)
+
+plt.tight_layout()
+plt.savefig('model_comparison.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+"""### Nhận xét tổng hợp Tuần 3:
+
+**1. Phân tích mô hình SVM:**
+- SVM với GridSearchCV đã tự động quét qua tất cả các cấu hình kết hợp của
+  3 siêu tham số (C, kernel, gamma) trên cùng khung đánh giá 10-Fold CV.
+- Kết quả cho thấy SVM có khả năng tìm được ranh giới phân tách tối ưu
+  trong không gian 13 chiều của dữ liệu Wine.
+
+**2. So sánh 3 mô hình:**
+- Cả 3 mô hình đều đạt hiệu năng phân loại cao trên tập dữ liệu Wine,
+  chứng tỏ dữ liệu có cấu trúc phân lớp rõ ràng.
+- Bảng so sánh cho thấy thứ hạng và sự chênh lệch cụ thể giữa các thuật toán.
+- Biểu đồ cột giúp trực quan hóa sự khác biệt một cách sinh động.
+
+**3. Kết luận:**
+- Việc sử dụng cùng khung đánh giá (10-Fold Stratified CV) và cùng độ đo
+  (Weighted F1-Score) đảm bảo tính công bằng và khách quan khi so sánh.
+- Kết quả giúp xác định mô hình tốt nhất cho bài toán phân loại rượu Wine.
+"""
